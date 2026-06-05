@@ -28,7 +28,7 @@ export default function Page() {
     return (
         <div className="flex min-h-svh flex-col p-4 sm:p-6 lg:p-8">
             <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
-                <img src="/api/logo" alt="中车" className="h-7 w-auto" />
+                <img src="/api/logo" alt="中车" className="h-7 max-w-32 object-contain flex-shrink-0" />
                 <h1 className="text-xl font-semibold tracking-tight">城轨制造中心 异常处理数据看板</h1>
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 text-sm">
