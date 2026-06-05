@@ -7,7 +7,7 @@ from clickhouse_connect.driver.client import Client
 # 🔧 全局数据库连接配置 — 部署时修改以下变量
 # ============================================================
 
-CH_HOST = "10.24.5.54"
+CH_HOST = "10.24.5.59"
 CH_PORT = 8123
 CH_USER = "cheakf"
 CH_PASSWORD = "Swq8855830."
