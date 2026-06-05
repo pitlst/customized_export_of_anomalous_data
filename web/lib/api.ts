@@ -2,7 +2,9 @@
 // 前端 API 客户端 — 与后端 Litestar 服务对接
 // ============================================================
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8800"
+// 部署时前后端同源 → 空字符串（相对路径）
+// 开发时如需指向其他端口，在 .env.local 中设置 NEXT_PUBLIC_API_BASE=http://localhost:8800
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? ""
 
 export interface ApiError {
   message: string
