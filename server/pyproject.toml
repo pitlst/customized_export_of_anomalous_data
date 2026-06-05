@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "clickhouse-connect>=1.0.0",
+    "clickhouse-connect>=0.8.0",
+    "duckdb>=1.4.0",
     "litestar[standard]>=2.21.1",
+    "pandas>=2.3.0",
     "pydantic>=2.13.4",
 ]
 # 部署到内网后想要更新依赖需要解除以下注释

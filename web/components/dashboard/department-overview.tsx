@@ -23,17 +23,18 @@ const columns: ColumnDef<DepartmentStats>[] = [
   { accessorKey: "关闭率", header: "关闭率", cell: ({ getValue }) => <RateBadge value={getValue<number>()} /> },
 ]
 
-export function DepartmentOverview() {
+export function DepartmentOverview({ params }: { params?: { year?: number; month?: number } }) {
   const [stats, setStats] = useState<DepartmentStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchDepartmentStats()
+    setLoading(true)
+    fetchDepartmentStats(params)
       .then(setStats)
       .catch((e) => setError(e.message ?? "加载失败"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [params?.year, params?.month])
 
   if (loading) return <Skeleton />
   if (error) return <ErrorMsg message={error} />

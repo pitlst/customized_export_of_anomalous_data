@@ -24,19 +24,21 @@ const columns: ColumnDef<GroupStats>[] = [
 
 interface GroupStatsProps {
   department: string
+  params?: { year?: number; month?: number }
 }
 
-export function GroupStats({ department }: GroupStatsProps) {
+export function GroupStats({ department, params }: GroupStatsProps) {
   const [stats, setStats] = useState<GroupStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchGroupStats(department)
+    setLoading(true)
+    fetchGroupStats(department, params)
       .then(setStats)
       .catch((e) => setError(e.message ?? "加载失败"))
       .finally(() => setLoading(false))
-  }, [department])
+  }, [department, params?.year, params?.month])
 
   if (loading) return <Skeleton />
   if (error) return <ErrorMsg message={error} />

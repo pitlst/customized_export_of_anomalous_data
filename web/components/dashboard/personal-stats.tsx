@@ -20,17 +20,22 @@ const columns: ColumnDef<PersonalStats>[] = [
   { accessorKey: "关闭率", header: "关闭率", cell: ({ getValue }) => <RateBadge value={getValue<number>()} /> },
 ]
 
-export function PersonalStats() {
+interface PersonalStatsProps {
+  params?: { year?: number; month?: number }
+}
+
+export function PersonalStats({ params }: PersonalStatsProps) {
   const [stats, setStats] = useState<PersonalStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchPersonalStats()
+    setLoading(true)
+    fetchPersonalStats(params)
       .then(setStats)
       .catch((e) => setError(e.message ?? "加载失败"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [params?.year, params?.month])
 
   if (loading) return <Skeleton />
   if (error) return <ErrorMsg message={error} />

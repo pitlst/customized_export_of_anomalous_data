@@ -32,17 +32,22 @@ function fmt(d: string) {
   return d.replace("T", " ").substring(0, 19)
 }
 
-export function RawDataTable() {
+interface RawDataTableProps {
+  params?: { year?: number; month?: number }
+}
+
+export function RawDataTable({ params }: RawDataTableProps) {
   const [records, setRecords] = useState<AnomalyRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchRecords()
+    setLoading(true)
+    fetchRecords(params)
       .then(setRecords)
       .catch((e) => setError(e.message ?? "加载失败"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [params?.year, params?.month])
 
   if (loading) return <Skeleton />
   if (error) return <ErrorMsg message={error} />

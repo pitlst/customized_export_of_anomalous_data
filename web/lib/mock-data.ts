@@ -219,14 +219,15 @@ function generateRecords(count: number): AnomalyRecord[] {
         const createDate = randomDate(baseDate, new Date("2026-05-30"))
         const initDate = randomDate(baseDate, new Date("2026-05-30"))
 
-        // 响应时间 (0.1 ~ 4h)
+        // 响应: 总时长阈值 2h (总时长 ≈ 有效时长, 短期内一致)
         const responseHours = Math.random() * 4
         const responseOvertime = responseHours > 2 ? "是" : "否"
         const responseDate = hoursAfter(initDate, responseHours)
 
-        // 处理时间 (1 ~ 36h)
-        const processHours = Math.random() * 36
-        const processOvertime = processHours > 24 ? "是" : "否"
+        // 处理: 总时长 1~36h, 有效时长 1~16h — 两者独立, 体现"总时长"与"有效时长"指标分离
+        const processHours = Math.random() * 36           // 总耗时(含非工作时段)
+        const effectiveProcessHours = Math.random() * 16  // 有效工作时长
+        const processOvertime = effectiveProcessHours > 8 ? "是" : "否"  // 有效超时 > 8h
         const processDate = hoursAfter(responseDate, Math.max(processHours - responseHours, 0.5))
 
         // 关闭时间
@@ -305,28 +306,75 @@ export function computeDepartmentStats(records: AnomalyRecord[]): DepartmentStat
 
 function buildDeptStat(name: string, rs: AnomalyRecord[]): DepartmentStats {
     const total = rs.length
-    const responded = rs.filter((r) => new Date(r.响应日期) > new Date("2023-01-01")).length
-    const respondedTimely2h = rs.filter((r) => r.响应是否超时 === "否").length
-    const processed = rs.filter((r) => new Date(r.处理日期) > new Date("2023-01-01")).length
-    const processedTimely24h = rs.filter((r) => r.处理是否超时 === "否").length
-    const closed = rs.filter((r) => new Date(r.关闭日期) > new Date("2023-01-01")).length
+    const now = new Date()
+    const THRESHOLD = new Date("2023-01-01")
+
+    let responded = 0
+    let respondedTimelyTotal = 0   // 总时长2H: ifnull(响应日期, now) - 发起日期 <= 2h
+    let respondedTimelyEffective = 0  // 有效时长2H: pre-computed flag
+
+    let processed = 0
+    let processedTimelyTotal = 0   // 总时长24H: ifnull(处理日期, now) - ifnull(响应日期, 发起日期) <= 24h
+    let processedTimelyEffective = 0  // 有效时长8H: pre-computed flag
+
+    let closed = 0
+
+    for (const r of rs) {
+        const initDate = new Date(r.发起日期)
+        const respDate = new Date(r.响应日期)
+        const procDate = new Date(r.处理日期)
+        const closeDate = new Date(r.关闭日期)
+
+        // --- 响应计数 ---
+        if (respDate > THRESHOLD) {
+            responded++
+            if ((respDate.getTime() - initDate.getTime()) / 3600000 <= 2) {
+                respondedTimelyTotal++
+            }
+        } else {
+            // 未响应: ifnull → now
+            if ((now.getTime() - initDate.getTime()) / 3600000 <= 2) {
+                respondedTimelyTotal++
+            }
+        }
+        if (r.响应是否超时 === "否") respondedTimelyEffective++
+
+        // --- 处理计数 ---
+        if (procDate > THRESHOLD) {
+            processed++
+            const baseDate = respDate > THRESHOLD ? respDate : initDate
+            if ((procDate.getTime() - baseDate.getTime()) / 3600000 <= 24) {
+                processedTimelyTotal++
+            }
+        } else {
+            // 未处理: ifnull → now
+            const baseDate = respDate > THRESHOLD ? respDate : initDate
+            if ((now.getTime() - baseDate.getTime()) / 3600000 <= 24) {
+                processedTimelyTotal++
+            }
+        }
+        if (r.处理是否超时 === "否") processedTimelyEffective++
+
+        // --- 关闭计数 ---
+        if (closeDate > THRESHOLD) closed++
+    }
 
     return {
         工作中心: name,
         总数: total,
         响应数: responded,
-        响应及时数_总时长2H: respondedTimely2h,
-        响应及时数_有效时长2H: respondedTimely2h,
+        响应及时数_总时长2H: respondedTimelyTotal,
+        响应及时数_有效时长2H: respondedTimelyEffective,
         处理数: processed,
-        处理及时数_总时长24H: processedTimely24h,
-        处理及时数_有效时长8H: processedTimely24h,
+        处理及时数_总时长24H: processedTimelyTotal,
+        处理及时数_有效时长8H: processedTimelyEffective,
         关闭数: closed,
         响应率: total > 0 ? responded / total : 0,
-        响应及时率_总时长2H: total > 0 ? respondedTimely2h / total : 0,
-        响应及时率_有效时长2H: total > 0 ? respondedTimely2h / total : 0,
+        响应及时率_总时长2H: total > 0 ? respondedTimelyTotal / total : 0,
+        响应及时率_有效时长2H: total > 0 ? respondedTimelyEffective / total : 0,
         处理率: total > 0 ? processed / total : 0,
-        处理及时率_总时长24H: total > 0 ? processedTimely24h / total : 0,
-        处理及时率_有效时长8H: total > 0 ? processedTimely24h / total : 0,
+        处理及时率_总时长24H: total > 0 ? processedTimelyTotal / total : 0,
+        处理及时率_有效时长8H: total > 0 ? processedTimelyEffective / total : 0,
         关闭率: total > 0 ? closed / total : 0,
     }
 }
@@ -346,11 +394,39 @@ export function computePersonalStats(records: AnomalyRecord[]): PersonalStats[] 
         .map(([key, rs]) => {
             const r0 = rs[0]
             const total = rs.length
-            const responded = rs.filter((r) => new Date(r.响应日期) > new Date("2023-01-01")).length
-            const respondedTimely = rs.filter((r) => r.响应是否超时 === "否").length
-            const processed = rs.filter((r) => new Date(r.处理日期) > new Date("2023-01-01")).length
-            const processedTimely = rs.filter((r) => r.处理是否超时 === "否").length
-            const closed = rs.filter((r) => new Date(r.关闭日期) > new Date("2023-01-01")).length
+            const now = new Date()
+            const THRESHOLD = new Date("2023-01-01")
+
+            let responded = 0, respondedTimelyTotal = 0, respondedTimelyEffective = 0
+            let processed = 0, processedTimelyTotal = 0, processedTimelyEffective = 0
+            let closed = 0
+
+            for (const r of rs) {
+                const initDate = new Date(r.发起日期)
+                const respDate = new Date(r.响应日期)
+                const procDate = new Date(r.处理日期)
+                const closeDate = new Date(r.关闭日期)
+
+                if (respDate > THRESHOLD) {
+                    responded++
+                    if ((respDate.getTime() - initDate.getTime()) / 3600000 <= 2) respondedTimelyTotal++
+                } else {
+                    if ((now.getTime() - initDate.getTime()) / 3600000 <= 2) respondedTimelyTotal++
+                }
+                if (r.响应是否超时 === "否") respondedTimelyEffective++
+
+                if (procDate > THRESHOLD) {
+                    processed++
+                    const baseDate = respDate > THRESHOLD ? respDate : initDate
+                    if ((procDate.getTime() - baseDate.getTime()) / 3600000 <= 24) processedTimelyTotal++
+                } else {
+                    const baseDate = respDate > THRESHOLD ? respDate : initDate
+                    if ((now.getTime() - baseDate.getTime()) / 3600000 <= 24) processedTimelyTotal++
+                }
+                if (r.处理是否超时 === "否") processedTimelyEffective++
+
+                if (closeDate > THRESHOLD) closed++
+            }
 
             return {
                 工号: key,
@@ -359,18 +435,18 @@ export function computePersonalStats(records: AnomalyRecord[]): PersonalStats[] 
                 部门: r0.department,
                 总数: total,
                 响应数: responded,
-                响应及时数_总时长2H: respondedTimely,
-                响应及时数_有效时长2H: respondedTimely,
+                响应及时数_总时长2H: respondedTimelyTotal,
+                响应及时数_有效时长2H: respondedTimelyEffective,
                 处理数: processed,
-                处理及时数_总时长24H: processedTimely,
-                处理及时数_有效时长8H: processedTimely,
+                处理及时数_总时长24H: processedTimelyTotal,
+                处理及时数_有效时长8H: processedTimelyEffective,
                 关闭数: closed,
                 响应率: total > 0 ? responded / total : 0,
-                响应及时率_总时长2H: total > 0 ? respondedTimely / total : 0,
-                响应及时率_有效时长2H: total > 0 ? respondedTimely / total : 0,
+                响应及时率_总时长2H: total > 0 ? respondedTimelyTotal / total : 0,
+                响应及时率_有效时长2H: total > 0 ? respondedTimelyEffective / total : 0,
                 处理率: total > 0 ? processed / total : 0,
-                处理及时率_总时长24H: total > 0 ? processedTimely / total : 0,
-                处理及时率_有效时长8H: total > 0 ? processedTimely / total : 0,
+                处理及时率_总时长24H: total > 0 ? processedTimelyTotal / total : 0,
+                处理及时率_有效时长8H: total > 0 ? processedTimelyEffective / total : 0,
                 关闭率: total > 0 ? closed / total : 0,
             }
         })
@@ -392,28 +468,56 @@ export function computeGroupStats(records: AnomalyRecord[], department: string):
     return Array.from(map.entries())
         .map(([g, rs]) => {
             const total = rs.length
-            const responded = rs.filter((r) => new Date(r.响应日期) > new Date("2023-01-01")).length
-            const respondedTimely = rs.filter((r) => r.响应是否超时 === "否").length
-            const processed = rs.filter((r) => new Date(r.处理日期) > new Date("2023-01-01")).length
-            const processedTimely = rs.filter((r) => r.处理是否超时 === "否").length
-            const closed = rs.filter((r) => new Date(r.关闭日期) > new Date("2023-01-01")).length
+            const now = new Date()
+            const THRESHOLD = new Date("2023-01-01")
+
+            let responded = 0, respondedTimelyTotal = 0, respondedTimelyEffective = 0
+            let processed = 0, processedTimelyTotal = 0, processedTimelyEffective = 0
+            let closed = 0
+
+            for (const r of rs) {
+                const initDate = new Date(r.发起日期)
+                const respDate = new Date(r.响应日期)
+                const procDate = new Date(r.处理日期)
+                const closeDate = new Date(r.关闭日期)
+
+                if (respDate > THRESHOLD) {
+                    responded++
+                    if ((respDate.getTime() - initDate.getTime()) / 3600000 <= 2) respondedTimelyTotal++
+                } else {
+                    if ((now.getTime() - initDate.getTime()) / 3600000 <= 2) respondedTimelyTotal++
+                }
+                if (r.响应是否超时 === "否") respondedTimelyEffective++
+
+                if (procDate > THRESHOLD) {
+                    processed++
+                    const baseDate = respDate > THRESHOLD ? respDate : initDate
+                    if ((procDate.getTime() - baseDate.getTime()) / 3600000 <= 24) processedTimelyTotal++
+                } else {
+                    const baseDate = respDate > THRESHOLD ? respDate : initDate
+                    if ((now.getTime() - baseDate.getTime()) / 3600000 <= 24) processedTimelyTotal++
+                }
+                if (r.处理是否超时 === "否") processedTimelyEffective++
+
+                if (closeDate > THRESHOLD) closed++
+            }
 
             return {
                 组室: g,
                 总数: total,
                 响应数: responded,
-                响应及时数_总时长2H: respondedTimely,
-                响应及时数_有效时长2H: respondedTimely,
+                响应及时数_总时长2H: respondedTimelyTotal,
+                响应及时数_有效时长2H: respondedTimelyEffective,
                 处理数: processed,
-                处理及时数_总时长24H: processedTimely,
-                处理及时数_有效时长8H: processedTimely,
+                处理及时数_总时长24H: processedTimelyTotal,
+                处理及时数_有效时长8H: processedTimelyEffective,
                 关闭数: closed,
                 响应率: total > 0 ? responded / total : 0,
-                响应及时率_总时长2H: total > 0 ? respondedTimely / total : 0,
-                响应及时率_有效时长2H: total > 0 ? respondedTimely / total : 0,
+                响应及时率_总时长2H: total > 0 ? respondedTimelyTotal / total : 0,
+                响应及时率_有效时长2H: total > 0 ? respondedTimelyEffective / total : 0,
                 处理率: total > 0 ? processed / total : 0,
-                处理及时率_总时长24H: total > 0 ? processedTimely / total : 0,
-                处理及时率_有效时长8H: total > 0 ? processedTimely / total : 0,
+                处理及时率_总时长24H: total > 0 ? processedTimelyTotal / total : 0,
+                处理及时率_有效时长8H: total > 0 ? processedTimelyEffective / total : 0,
                 关闭率: total > 0 ? closed / total : 0,
             }
         })

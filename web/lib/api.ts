@@ -126,21 +126,38 @@ export interface GroupStats {
 }
 
 // ============================================================
-// API 方法
+// API 方法 — 支持可选 year/month 参数
 // ============================================================
 
-export function fetchRecords(): Promise<AnomalyRecord[]> {
-  return fetchApi<AnomalyRecord[]>("/api/records")
+interface DateParams {
+  year?: number
+  month?: number
 }
 
-export function fetchDepartmentStats(): Promise<DepartmentStats[]> {
-  return fetchApi<DepartmentStats[]>("/api/stats/department")
+function buildQuery(base: string, params?: DateParams): string {
+  if (!params) return base
+  const qs = new URLSearchParams()
+  if (params.year !== undefined) qs.set("year", String(params.year))
+  if (params.month !== undefined) qs.set("month", String(params.month))
+  const s = qs.toString()
+  return s ? `${base}?${s}` : base
 }
 
-export function fetchPersonalStats(): Promise<PersonalStats[]> {
-  return fetchApi<PersonalStats[]>("/api/stats/personal")
+export function fetchRecords(params?: DateParams): Promise<AnomalyRecord[]> {
+  return fetchApi<AnomalyRecord[]>(buildQuery("/api/records", params))
 }
 
-export function fetchGroupStats(department: string): Promise<GroupStats[]> {
-  return fetchApi<GroupStats[]>(`/api/stats/group?department=${encodeURIComponent(department)}`)
+export function fetchDepartmentStats(params?: DateParams): Promise<DepartmentStats[]> {
+  return fetchApi<DepartmentStats[]>(buildQuery("/api/stats/department", params))
+}
+
+export function fetchPersonalStats(params?: DateParams): Promise<PersonalStats[]> {
+  return fetchApi<PersonalStats[]>(buildQuery("/api/stats/personal", params))
+}
+
+export function fetchGroupStats(department: string, params?: DateParams): Promise<GroupStats[]> {
+  const qs = new URLSearchParams({ department })
+  if (params?.year !== undefined) qs.set("year", String(params.year))
+  if (params?.month !== undefined) qs.set("month", String(params.month))
+  return fetchApi<GroupStats[]>(`/api/stats/group?${qs.toString()}`)
 }

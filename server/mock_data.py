@@ -68,12 +68,15 @@ def _build_base(idx: int, person: dict[str, str], project: dict[str, str],
     create_date = _random_date(BASE_DATE, END_DATE)
     department = ORG_MAP.get(person["group"], "未知")
 
+    # 响应: 总时长阈值 2h (总时长 ≈ 有效时长, 短期内一致)
     response_hours = random.uniform(0.1, 4)
     response_overtime = "是" if response_hours > 2 else "否"
     response_date = _hours_after(init_date, response_hours)
 
-    process_hours = random.uniform(1, 36)
-    process_overtime = "是" if process_hours > 24 else "否"
+    # 处理: 总时长 1~36h, 有效时长 1~16h — 两者独立, 体现"总时长"与"有效时长"指标分离
+    process_hours = random.uniform(1, 36)           # 总耗时(含非工作时段)
+    effective_process_hours = random.uniform(1, 16)  # 有效工作时长
+    process_overtime = "是" if effective_process_hours > 8 else "否"  # 有效超时 > 8h
     process_date = _hours_after(response_date, max(process_hours - response_hours, 0.5))
 
     close_hours = random.uniform(1, 72)
@@ -144,6 +147,12 @@ def get_records(count: int = 120) -> list[dict[str, Any]]:
 
 
 # --- 统计函数 ---
+# 计算逻辑对齐谢总工作/export/sql.py 中的 SQL 模板
+#   - 响应及时数(总时长2H):  ifnull(响应日期, now) - 发起日期 <= 2h
+#   - 响应及时数(有效时长2H): pre-computed 响应是否超时 flag
+#   - 处理及时数(总时长24H): ifnull(处理日期, now) - ifnull(响应日期, 发起日期) <= 24h
+#   - 处理及时数(有效时长8H): pre-computed 处理是否超时 flag
+#   - 计数类: 对应日期 >= 2023-01-01 才算已发生
 
 def _to_dt(s: str) -> datetime:
     return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
@@ -159,30 +168,84 @@ def _compute(base: list[dict[str, Any]], key_fn, name_fn) -> list[dict[str, Any]
         buckets.setdefault(k, []).append(r)
 
     result: list[dict[str, Any]] = []
+    now = datetime.now()
+
     for k, rs in buckets.items():
         total = len(rs)
-        responded = sum(1 for r in rs if _to_dt(r["响应日期"]) > THRESHOLD)
-        responded_timely = sum(1 for r in rs if r["响应是否超时"] == "否")
-        processed = sum(1 for r in rs if _to_dt(r["处理日期"]) > THRESHOLD)
-        processed_timely = sum(1 for r in rs if r["处理是否超时"] == "否")
-        closed = sum(1 for r in rs if _to_dt(r["关闭日期"]) > THRESHOLD)
+
+        # 响应数: 响应日期 >= 2023 才算已响应
+        responded = 0
+        # 响应及时数(总时长2H): ifnull(响应日期, now) - 发起日期 <= 2h
+        responded_timely_total = 0
+        # 响应及时数(有效时长2H): pre-computed flag
+        responded_timely_effective = 0
+
+        # 处理数: 处理日期 >= 2023 才算已处理
+        processed = 0
+        # 处理及时数(总时长24H): ifnull(处理日期, now) - ifnull(响应日期, 发起日期) <= 24h
+        processed_timely_total = 0
+        # 处理及时数(有效时长8H): pre-computed flag
+        processed_timely_effective = 0
+
+        # 关闭数
+        closed = 0
+
+        for r in rs:
+            init_dt = _to_dt(r["发起日期"])
+            resp_dt = _to_dt(r["响应日期"])
+            proc_dt = _to_dt(r["处理日期"])
+            close_dt = _to_dt(r["关闭日期"])
+
+            # --- 响应计数 ---
+            if resp_dt > THRESHOLD:
+                responded += 1
+                # 总时长: 响应日期 - 发起日期 <= 2h
+                if (resp_dt - init_dt).total_seconds() / 3600 <= 2:
+                    responded_timely_total += 1
+            else:
+                # 未响应: 用当前时间模拟 ifnull
+                if (now - init_dt).total_seconds() / 3600 <= 2:
+                    responded_timely_total += 1
+
+            if r["响应是否超时"] == "否":
+                responded_timely_effective += 1
+
+            # --- 处理计数 ---
+            if proc_dt > THRESHOLD:
+                processed += 1
+                # 总时长24H: 处理日期 - ifnull(响应日期, 发起日期) <= 24h
+                base_dt = resp_dt if resp_dt > THRESHOLD else init_dt
+                if (proc_dt - base_dt).total_seconds() / 3600 <= 24:
+                    processed_timely_total += 1
+            else:
+                # 未处理: 用当前时间
+                base_dt = resp_dt if resp_dt > THRESHOLD else init_dt
+                if (now - base_dt).total_seconds() / 3600 <= 24:
+                    processed_timely_total += 1
+
+            if r["处理是否超时"] == "否":
+                processed_timely_effective += 1
+
+            # --- 关闭计数 ---
+            if close_dt > THRESHOLD:
+                closed += 1
 
         result.append({
             **name_fn(k),
             "总数": total,
             "响应数": responded,
-            "响应及时数_总时长2H": responded_timely,
-            "响应及时数_有效时长2H": responded_timely,
+            "响应及时数_总时长2H": responded_timely_total,
+            "响应及时数_有效时长2H": responded_timely_effective,
             "处理数": processed,
-            "处理及时数_总时长24H": processed_timely,
-            "处理及时数_有效时长8H": processed_timely,
+            "处理及时数_总时长24H": processed_timely_total,
+            "处理及时数_有效时长8H": processed_timely_effective,
             "关闭数": closed,
             "响应率": responded / total if total else 0,
-            "响应及时率_总时长2H": responded_timely / total if total else 0,
-            "响应及时率_有效时长2H": responded_timely / total if total else 0,
+            "响应及时率_总时长2H": responded_timely_total / total if total else 0,
+            "响应及时率_有效时长2H": responded_timely_effective / total if total else 0,
             "处理率": processed / total if total else 0,
-            "处理及时率_总时长24H": processed_timely / total if total else 0,
-            "处理及时率_有效时长8H": processed_timely / total if total else 0,
+            "处理及时率_总时长24H": processed_timely_total / total if total else 0,
+            "处理及时率_有效时长8H": processed_timely_effective / total if total else 0,
             "关闭率": closed / total if total else 0,
         })
     return result
