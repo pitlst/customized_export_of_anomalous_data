@@ -24,9 +24,5 @@ def get_ch_client() -> Client:
         username=CH_USER,
         password=CH_PASSWORD,
         database=CH_DATABASE,
-        settings={
-            "timezone": "Asia/Shanghai",
-            "date_time_input_format": "best_effort",
-        },
     )
 

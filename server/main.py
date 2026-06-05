@@ -19,7 +19,7 @@ from litestar.params import Parameter
 from litestar.static_files.config import create_static_files_router
 
 import sql as sql_module
-from connect import get_ch_client
+from connect import get_ch_client, CH_HOST, CH_PORT, CH_DATABASE
 
 logger = logging.getLogger("litestar")
 
@@ -44,13 +44,16 @@ def _build_pipeline(year: int, month: int) -> duckdb.DuckDBPyConnection:
     3. 加载 org_map 并 join 出 department
     4. 返回准备好的 DuckDB 连接, 可直接跑聚合 SQL
     """
+    t0 = datetime.now()
     db = duckdb.connect(":memory:")
 
     # 1) 加载组织架构映射表
+    logger.info("[pipeline] 加载 org_map: %s", _ORG_CSV_PATH)
     db.execute(f"""
         CREATE TABLE org_map AS
         SELECT * FROM read_csv_auto('{_ORG_CSV_PATH.as_posix()}')
     """)
+    t1 = datetime.now()
 
     # 2) 从 ClickHouse 拉取当月数据
     start_date = pd.Timestamp(year=year, month=month, day=1)
@@ -59,25 +62,32 @@ def _build_pipeline(year: int, month: int) -> duckdb.DuckDBPyConnection:
     else:
         end_date = pd.Timestamp(year=year + 1, month=1, day=1)
 
+    logger.info("[pipeline] 连接 ClickHouse: %s:%d/%s",
+        CH_HOST, CH_PORT, CH_DATABASE)
     ch = get_ch_client()
-    logger.info("ClickHouse 查询: %s ~ %s", start_date.date(), end_date.date())
-
-    df = ch.query_df(
-        "SELECT * FROM dwd.cg_mes_usm_exception_processed bill "
-        "WHERE bill.\"发起日期\" >= %(start)s AND bill.\"发起日期\" < %(end)s",
-        parameters={"start": start_date, "end": end_date},
+    sql_query = (
+        'SELECT * FROM dwd.cg_mes_usm_exception_processed bill '
+        'WHERE bill."发起日期" >= %(start)s AND bill."发起日期" < %(end)s'
     )
+    logger.info("[pipeline] 执行查询: %s ~ %s", start_date.date(), end_date.date())
 
-    logger.info("查询到 %d 条记录", len(df))
+    df = ch.query_df(sql_query, parameters={"start": start_date, "end": end_date})
+    t2 = datetime.now()
+
+    col_count = len(df.columns)
+    row_count = len(df)
+    logger.info("[pipeline] 查询完成: %d 行 x %d 列 (耗时 %.1fs)",
+        row_count, col_count, (t2 - t1).total_seconds())
 
     # 3) UTC → Asia/Shanghai 本地时间
-    for col in df.columns:
-        if str(df[col].dtype).startswith("datetime"):
-            df[col] = (
-                pd.to_datetime(df[col], utc=True)
-                .dt.tz_convert("Asia/Shanghai")
-                .dt.tz_localize(None)
-            )
+    dt_cols = [c for c in df.columns if str(df[c].dtype).startswith("datetime")]
+    for col in dt_cols:
+        df[col] = (
+            pd.to_datetime(df[col], utc=True)
+            .dt.tz_convert("Asia/Shanghai")
+            .dt.tz_localize(None)
+        )
+    logger.info("[pipeline] 时区转换: %d 列 (%s)", len(dt_cols), ", ".join(dt_cols[:5]))
 
     # 4) 注册到 DuckDB, 创建带 department 的视图
     db.register("cg_mes_usm_exception_processed", df)
@@ -88,6 +98,10 @@ def _build_pipeline(year: int, month: int) -> duckdb.DuckDBPyConnection:
         FROM cg_mes_usm_exception_processed bill
         LEFT JOIN org_map ON bill."指定响应人组室" = org_map."组室"
     """)
+
+    total_elapsed = (datetime.now() - t0).total_seconds()
+    logger.info("[pipeline] 管线就绪, 总耗时 %.1fs (org_map %.1fs, ch_query %.1fs)",
+        total_elapsed, (t1 - t0).total_seconds(), (t2 - t1).total_seconds())
 
     return db
 
@@ -156,7 +170,7 @@ async def api_records(
         db = _build_pipeline(y, m)
         return _df_to_records(db.table("data").df())
     except Exception as e:
-        logger.warning("ClickHouse 查询失败, 降级至 mock: %s", e)
+        logger.exception("ClickHouse 查询 /api/records 失败 (y=%d m=%d): %s", y, m, e)
         return get_records(120)
 
 
@@ -173,7 +187,7 @@ async def api_department_stats(
         )
         return _compute_rates(records)
     except Exception as e:
-        logger.warning("ClickHouse 查询失败, 降级至 mock: %s", e)
+        logger.exception("ClickHouse 查询 /api/stats/department 失败 (y=%d m=%d): %s", y, m, e)
         return compute_department_stats(RECORDS)
 
 
@@ -189,7 +203,7 @@ async def api_personal_stats(
             db.sql(sql_module.total_sql.format(table="data")).df()
         )
     except Exception as e:
-        logger.warning("ClickHouse 查询失败, 降级至 mock: %s", e)
+        logger.exception("ClickHouse 查询 /api/stats/personal 失败 (y=%d m=%d): %s", y, m, e)
         return compute_personal_stats(RECORDS)
 
 
@@ -210,7 +224,8 @@ async def api_group_stats(
             db.sql(sql_module.group_sql.format(table="data", department=department)).df()
         )
     except Exception as e:
-        logger.warning("ClickHouse 查询失败, 降级至 mock: %s", e)
+        logger.exception("ClickHouse 查询 /api/stats/group?department=%s 失败 (y=%d m=%d): %s",
+                         department, y, m, e)
         return compute_group_stats(RECORDS, department)
 
 
