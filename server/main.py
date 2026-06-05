@@ -16,6 +16,7 @@ import pandas as pd
 from litestar import Litestar, get
 from litestar.config.cors import CORSConfig
 from litestar.params import Parameter
+from litestar.static_files.config import StaticFilesConfig
 
 import sql as sql_module
 from connect import get_ch_client
@@ -219,6 +220,10 @@ async def api_group_stats(
 
 cors_config = CORSConfig(allow_origins=["*"], allow_methods=["GET"])
 
+# 前端静态文件目录 (部署时将 web/out/* 放入此目录)
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+
 app = Litestar(
     route_handlers=[
         api_records,
@@ -227,8 +232,11 @@ app = Litestar(
         api_group_stats,
     ],
     cors_config=cors_config,
+    static_files_config=[
+        StaticFilesConfig(directories=[STATIC_DIR], path="/"),
+    ],
 )
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8800)
+    uvicorn.run("main:app", host="0.0.0.0", port=12375)
