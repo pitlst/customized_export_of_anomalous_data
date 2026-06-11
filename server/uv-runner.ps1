@@ -1,6 +1,6 @@
 #requires -Version 5.1
-# 单项目 uv 自动运行器（带崩溃重试）
-# 将此脚本放在 uv 项目根目录下，或项目根目录的任意子目录下运行
+# 单项目 uv 自动运行器（支持 .git 在祖先目录）
+# 将此脚本放在 uv 项目子目录下运行（如 backend/uv-runner.ps1）
 # 需要 uv 和 git 在 PATH 中
 
 # ==================== 配置区 ====================
@@ -9,7 +9,7 @@ $MaxRestarts = 5
 $LogDir = Join-Path $PSScriptRoot ".uv-runner-logs"
 
 # 自定义启动命令（留空则自动探测）
-$CustomCommand = "uv run main.py"
+$CustomCommand = ""
 
 # 工具路径
 $GitPath = "git"
@@ -25,28 +25,31 @@ function Write-Log {
     Add-Content -Path $logFile -Value $logLine -ErrorAction SilentlyContinue
 }
 
-# ==================== 项目路径探测 ====================
+# ==================== 路径探测 ====================
 $ScriptDir = $PSScriptRoot
-$ParentDir = Split-Path $ScriptDir -Parent
 
-# 检查当前目录
-$HasGitCurrent = Test-Path (Join-Path $ScriptDir ".git")
-$HasPyProjectCurrent = Test-Path (Join-Path $ScriptDir "pyproject.toml")
-
-# 检查上一级目录
-$HasGitParent = if ($ParentDir) { Test-Path (Join-Path $ParentDir ".git") } else { $false }
-$HasPyProjectParent = if ($ParentDir) { Test-Path (Join-Path $ParentDir "pyproject.toml") } else { $false }
-
+# 1. 找 uv 项目目录：当前目录必须有 pyproject.toml
 $ProjectPath = $null
-
-if ($HasGitCurrent -and $HasPyProjectCurrent) {
+if (Test-Path (Join-Path $ScriptDir "pyproject.toml")) {
     $ProjectPath = $ScriptDir
-    Write-Log "项目根目录: 当前目录 ($ScriptDir)"
-} elseif ($HasGitParent -and $HasPyProjectParent) {
-    $ProjectPath = $ParentDir
-    Write-Log "项目根目录: 上一级目录 ($ParentDir)"
 } else {
-    Write-Error "未找到 uv 项目。当前目录或其上一级目录必须同时包含 pyproject.toml 和 .git"
+    Write-Error "当前目录 ($ScriptDir) 缺少 pyproject.toml，请将脚本放在 uv 项目目录下"
+    exit 1
+}
+
+# 2. 找 Git 根目录：从脚本目录向上递归查找 .git
+$GitRoot = $ScriptDir
+$foundGit = $false
+while ($GitRoot -and (Split-Path $GitRoot -Parent) -ne $GitRoot) {
+    if (Test-Path (Join-Path $GitRoot ".git")) {
+        $foundGit = $true
+        break
+    }
+    $GitRoot = Split-Path $GitRoot -Parent
+}
+
+if (!$foundGit) {
+    Write-Error "未找到 .git 仓库（已从 $ScriptDir 向上回溯到根目录）"
     exit 1
 }
 
@@ -133,21 +136,21 @@ function Stop-Project {
     }
 }
 
-# ==================== Git 操作 ====================
+# ==================== Git 操作（在 Git 根目录执行） ====================
 function Test-GiteaUpdate {
     try {
-        $fetch = & $GitPath -C $ProjectPath fetch origin 2>&1
+        $fetch = & $GitPath -C $GitRoot fetch origin 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Log "git fetch 失败: $fetch" "ERROR"
             return $false
         }
         
-        $local = & $GitPath -C $ProjectPath rev-parse HEAD 2>$null
-        $remote = & $GitPath -C $ProjectPath rev-parse origin/HEAD 2>$null
+        $local = & $GitPath -C $GitRoot rev-parse HEAD 2>$null
+        $remote = & $GitPath -C $GitRoot rev-parse origin/HEAD 2>$null
         
         if ($LASTEXITCODE -ne 0) {
-            $branch = & $GitPath -C $ProjectPath rev-parse --abbrev-ref origin/HEAD 2>$null
-            if ($branch) { $remote = & $GitPath -C $ProjectPath rev-parse $branch 2>$null }
+            $branch = & $GitPath -C $GitRoot rev-parse --abbrev-ref origin/HEAD 2>$null
+            if ($branch) { $remote = & $GitPath -C $GitRoot rev-parse $branch 2>$null }
         }
         
         if ($local -and $remote -and ($local -ne $remote)) {
@@ -163,14 +166,14 @@ function Test-GiteaUpdate {
 function Update-Code {
     Write-Log "正在拉取最新代码..."
     
-    $stash = & $GitPath -C $ProjectPath stash push -m "uv-runner-auto-stash" 2>&1
+    $stash = & $GitPath -C $GitRoot stash push -m "uv-runner-auto-stash" 2>&1
     $stashed = ($LASTEXITCODE -eq 0) -and ($stash -notmatch "No local changes")
     
-    $pull = & $GitPath -C $ProjectPath pull origin 2>&1
+    $pull = & $GitPath -C $GitRoot pull origin 2>&1
     $ok = $LASTEXITCODE -eq 0
     
     if ($stashed) {
-        $pop = & $GitPath -C $ProjectPath stash pop 2>&1
+        $pop = & $GitPath -C $GitRoot stash pop 2>&1
         if ($LASTEXITCODE -ne 0) { Write-Log "stash pop 失败，可能需要手动解决冲突: $pop" "WARN" }
     }
     
@@ -181,8 +184,9 @@ function Update-Code {
 # ==================== 启动时检查更新 ====================
 Write-Log "========================================"
 Write-Log "uv 项目自动运行器启动"
-Write-Log "项目: $ProjectName"
-Write-Log "路径: $ProjectPath"
+Write-Log "uv 项目目录: $ProjectPath"
+Write-Log "Git 根目录: $GitRoot"
+Write-Log "项目名称: $ProjectName"
 Write-Log "检查间隔: $CheckIntervalMinutes 分钟"
 Write-Log "最大崩溃重试: $MaxRestarts 次"
 Write-Log "========================================"
