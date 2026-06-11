@@ -9,7 +9,7 @@ $MaxRestarts = 5
 $LogDir = Join-Path $PSScriptRoot ".uv-runner-logs"
 
 # 自定义启动命令（留空则自动探测）
-$CustomCommand = ""
+$CustomCommand = "uv run main.py"
 
 # 工具路径
 $GitPath = "git"
